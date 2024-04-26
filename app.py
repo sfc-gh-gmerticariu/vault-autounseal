@@ -234,26 +234,29 @@ def wait_for_quorum(replica_list, main_url):
 
 def get_vault_pods():
     if pod_retrieval_max_retries <= 0:
-        print("Pod retrieval max retries cannot be lower than 1: {}", pod_retrieval_max_retries)
+        logger.error("Pod retrieval max retries cannot be lower than 1: {}", pod_retrieval_max_retries)
         exit(2)
 
-    for _ in range(pod_retrieval_max_retries):
+    tries = 0
+    while tries < pod_retrieval_max_retries:
         pod_list = api_instance.list_namespaced_pod(
-            namespace=vault_namespace, label_selector="vault-sealed=true"
+            namespace=vault_namespace, label_selector=vault_label_selector
         )
 
-        if any(p.status.pod_ip is None for p in pod_list.items):
+        if len(pod_list.items) == 0:
+            logger.error("Not Vault pods found. Please make sure they are annotated with: {}", vault_label_selector)
+            exit(2)
+
+        vault_pods_with_no_ip = [pod.metadata.name for pod in pod_list.items if pod.status.pod_ip is None]
+
+        if len(vault_pods_with_no_ip) > 0:
+            logger.warning("Vault pods have no assigned IP address: {}", vault_pods_with_no_ip)
             sleep(scan_delay)
             continue
 
         return pod_list
 
-    if len(pod_list.items) == 0:
-        print("Not Vault pods found")
-        exit(2)
-
-    print("Vault pods have no assigned IP address: {}",
-          [p.metadata.name for p in pod_list.items if p.status.pod_ip is None])
+    logger.error("Waiting for Vault pods to be ready timed out.")
     exit(2)
 
 
@@ -278,6 +281,7 @@ if __name__ == "__main__":
         vault_keys = os.environ["VAULT_KEYS_SECRET"]
         scan_delay = int(os.environ["VAULT_SCAN_DELAY"])
         pod_retrieval_max_retries = int(os.environ.get("VAULT_POD_RETRIEVAL_MAX_RETRIES", 5))
+        vault_label_selector = os.environ.get("VAULT_LABEL_SELECTOR", "vault-sealed=true")
         if not vault_url:
             raise KeyError
     except KeyError as error:
@@ -334,8 +338,8 @@ if __name__ == "__main__":
                 [
                     f"{url.scheme}://{x[4][0]}:{x[4][1]}"
                     for x in socket.getaddrinfo(
-                        vault_hostname, vault_port, proto=socket.IPPROTO_TCP
-                    )
+                    vault_hostname, vault_port, proto=socket.IPPROTO_TCP
+                )
                 ]
             )
         except socket.gaierror as err:
