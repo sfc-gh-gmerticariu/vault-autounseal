@@ -232,6 +232,31 @@ def wait_for_quorum(replica_list, main_url):
     logger.info("Quorum has been established with {} as the leader", main_url)
 
 
+def get_vault_pods():
+    if pod_retrieval_max_retries <= 0:
+        print("Pod retrieval max retries cannot be lower than 1: {}", pod_retrieval_max_retries)
+        exit(2)
+
+    for _ in range(pod_retrieval_max_retries):
+        pod_list = api_instance.list_namespaced_pod(
+            namespace=vault_namespace, label_selector="vault-sealed=true"
+        )
+
+        if any(p.status.pod_ip is None for p in pod_list.items):
+            sleep(scan_delay)
+            continue
+
+        return pod_list
+
+    if len(pod_list.items) == 0:
+        print("Not Vault pods found")
+        exit(2)
+
+    print("Vault pods have no assigned IP address: {}",
+          [p.metadata.name for p in pod_list.items if p.status.pod_ip is None])
+    exit(2)
+
+
 if __name__ == "__main__":
 
     vault_initialized = False
@@ -243,6 +268,7 @@ if __name__ == "__main__":
     vault_keys = ""  # nosec
     scan_delay = ""
     vault_url = ""
+    pod_retrieval_max_retries = ""
     try:
         vault_url = os.environ["VAULT_URL"]
         secret_shares = os.environ["VAULT_SECRET_SHARES"]
@@ -251,6 +277,7 @@ if __name__ == "__main__":
         root_token = os.environ["VAULT_ROOT_TOKEN_SECRET"]
         vault_keys = os.environ["VAULT_KEYS_SECRET"]
         scan_delay = int(os.environ["VAULT_SCAN_DELAY"])
+        pod_retrieval_max_retries = int(os.environ.get("VAULT_POD_RETRIEVAL_MAX_RETRIES", 5))
         if not vault_url:
             raise KeyError
     except KeyError as error:
@@ -288,9 +315,6 @@ if __name__ == "__main__":
     vault_hostname = url.hostname
     vault_port = url.port
     vault_namespace = url.hostname.split(".")[1]
-    pods = api_instance.list_namespaced_pod(
-        namespace=vault_namespace, label_selector="vault-sealed=true"
-    )
     logger.info("Vault Hostname: {} Vault Port: {}", vault_hostname, vault_port)
 
     while True:
@@ -319,6 +343,8 @@ if __name__ == "__main__":
             sleep(5)
             continue
         vault_replicas.clear()
+
+        pods = get_vault_pods()
         for pod in pods.items:
             vault_replicas.append(f"{url.scheme}://{pod.status.pod_ip}:{vault_port}")
         logger.info("Discovered Vault instance(s): {}", vault_replicas)
