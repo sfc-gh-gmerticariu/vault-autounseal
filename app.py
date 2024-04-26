@@ -239,6 +239,7 @@ def get_vault_pods():
 
     tries = 0
     while tries < pod_retrieval_max_retries:
+        tries = tries + 1
         pod_list = api_instance.list_namespaced_pod(
             namespace=vault_namespace, label_selector=vault_label_selector
         )
