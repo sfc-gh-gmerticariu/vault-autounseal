@@ -257,7 +257,7 @@ def get_vault_pods():
 
         return pod_list
 
-    logger.error("Waiting for Vault pods to be ready timed out.")
+    logger.error("Waiting for Vault pods to be ready timed out. Will exit.")
     exit(2)
 
 
