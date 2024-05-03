@@ -232,6 +232,35 @@ def wait_for_quorum(replica_list, main_url):
     logger.info("Quorum has been established with {} as the leader", main_url)
 
 
+def get_vault_pods():
+    if pod_retrieval_max_retries <= 0:
+        logger.error("Pod retrieval max retries cannot be lower than 1: {}", pod_retrieval_max_retries)
+        exit(2)
+
+    tries = 0
+    while tries < pod_retrieval_max_retries:
+        tries = tries + 1
+        pod_list = api_instance.list_namespaced_pod(
+            namespace=vault_namespace, label_selector=vault_label_selector
+        )
+
+        if len(pod_list.items) == 0:
+            logger.error("Not Vault pods found. Please make sure they are annotated with: {}", vault_label_selector)
+            exit(2)
+
+        vault_pods_with_no_ip = [pod.metadata.name for pod in pod_list.items if pod.status.pod_ip is None]
+
+        if len(vault_pods_with_no_ip) > 0:
+            logger.warning("Vault pods have no assigned IP address: {}", vault_pods_with_no_ip)
+            sleep(scan_delay)
+            continue
+
+        return pod_list
+
+    logger.error("Waiting for Vault pods to be ready timed out. Will exit.")
+    exit(2)
+
+
 if __name__ == "__main__":
 
     vault_initialized = False
@@ -243,6 +272,7 @@ if __name__ == "__main__":
     vault_keys = ""  # nosec
     scan_delay = ""
     vault_url = ""
+    pod_retrieval_max_retries = ""
     try:
         vault_url = os.environ["VAULT_URL"]
         secret_shares = os.environ["VAULT_SECRET_SHARES"]
@@ -251,6 +281,8 @@ if __name__ == "__main__":
         root_token = os.environ["VAULT_ROOT_TOKEN_SECRET"]
         vault_keys = os.environ["VAULT_KEYS_SECRET"]
         scan_delay = int(os.environ["VAULT_SCAN_DELAY"])
+        pod_retrieval_max_retries = int(os.environ.get("VAULT_POD_RETRIEVAL_MAX_RETRIES", 5))
+        vault_label_selector = os.environ.get("VAULT_LABEL_SELECTOR", "vault-sealed=true")
         if not vault_url:
             raise KeyError
     except KeyError as error:
@@ -288,9 +320,6 @@ if __name__ == "__main__":
     vault_hostname = url.hostname
     vault_port = url.port
     vault_namespace = url.hostname.split(".")[1]
-    pods = api_instance.list_namespaced_pod(
-        namespace=vault_namespace, label_selector="vault-sealed=true"
-    )
     logger.info("Vault Hostname: {} Vault Port: {}", vault_hostname, vault_port)
 
     while True:
@@ -310,8 +339,8 @@ if __name__ == "__main__":
                 [
                     f"{url.scheme}://{x[4][0]}:{x[4][1]}"
                     for x in socket.getaddrinfo(
-                        vault_hostname, vault_port, proto=socket.IPPROTO_TCP
-                    )
+                    vault_hostname, vault_port, proto=socket.IPPROTO_TCP
+                )
                 ]
             )
         except socket.gaierror as err:
@@ -319,6 +348,8 @@ if __name__ == "__main__":
             sleep(5)
             continue
         vault_replicas.clear()
+
+        pods = get_vault_pods()
         for pod in pods.items:
             vault_replicas.append(f"{url.scheme}://{pod.status.pod_ip}:{vault_port}")
         logger.info("Discovered Vault instance(s): {}", vault_replicas)
